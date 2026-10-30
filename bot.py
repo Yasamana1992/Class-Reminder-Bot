@@ -2,13 +2,17 @@ import os
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import sqlite3
 from database import (
     get_admin_role,
     add_admin,
     remove_admin,
     add_student,
     get_students,
-    delete_student
+    delete_student,
+    add_class,
+    get_classes,
+    enroll_student
 )
 
 load_dotenv()
@@ -244,6 +248,121 @@ async def delete_student_command(update: Update, context: ContextTypes.DEFAULT_T
             "دانش‌آموزی با این شناسه پیدا نشد."
         )
 
+async def add_class_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.message.reply_text(
+            "⛔️ فقط مالک و مدیر اجازه افزودن کلاس را دارند."
+        )
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "روش استفاده:\n/add_class Class Name"
+        )
+        return
+
+    class_name = " ".join(context.args)
+
+    try:
+        class_id = add_class(class_name)
+
+        await update.message.reply_text(
+            f"✅ کلاس {class_name} با موفقیت ثبت شد.\n"
+            f"شناسه کلاس: {class_id}"
+        )
+
+    except ValueError as error:
+        await update.message.reply_text(
+            f"⚠️ خطا: {error}"
+        )
+
+async def classes_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.message.reply_text(
+            "⛔️ فقط مالک و مدیر اجازه مشاهده فهرست کلاس‌ها را دارند."
+        )
+        return
+
+    classes = get_classes()
+
+    if not classes:
+        await update.message.reply_text(
+            "هنوز هیچ کلاسی ثبت نشده است."
+        )
+        return
+
+    message = "📚 فهرست کلاس‌ها:\n\n"
+
+    for class_id, class_name, description, created_at in classes:
+        message += (
+            f"🆔 شناسه: {class_id}\n"
+            f"📖 نام کلاس: {class_name}\n"
+            f"📝 توضیحات: {description or 'ندارد'}\n"
+            "--------------------\n"
+        )
+
+    await update.message.reply_text(message)
+
+async def enroll_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.message.reply_text(
+            "⛔️ فقط مالک و مدیر اجازه ثبت‌نام دارند."
+        )
+        return
+
+    if len(context.args) != 2:
+        await update.message.reply_text(
+            "روش استفاده:\n/enroll STUDENT_ID CLASS_ID"
+        )
+        return
+
+    try:
+        student_id = int(context.args[0])
+        class_id = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text(
+            "⚠️ شناسه دانش‌آموز و کلاس باید عددی باشند."
+        )
+        return
+
+    if student_id <= 0 or class_id <= 0:
+        await update.message.reply_text(
+            "⚠️ شناسه‌ها باید عدد مثبت باشند."
+        )
+        return
+
+    try:
+        enrolled = enroll_student(student_id, class_id)
+
+        if enrolled:
+            await update.message.reply_text(
+                "✅ دانش‌آموز با موفقیت در کلاس ثبت‌نام شد."
+            )
+        else:
+            await update.message.reply_text(
+                "این دانش‌آموز قبلاً در این کلاس ثبت‌نام شده است."
+            )
+
+    except sqlite3.IntegrityError:
+        await update.message.reply_text(
+            "⚠️ دانش‌آموز یا کلاس با این شناسه وجود ندارد."
+        )
+
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -255,6 +374,10 @@ def main():
     app.add_handler(CommandHandler("add_student", add_student_command))
     app.add_handler(CommandHandler("students", students_command))
     app.add_handler(CommandHandler("delete_student", delete_student_command))
+    app.add_handler(CommandHandler("add_class", add_class_command))
+    app.add_handler(CommandHandler("classes", classes_command))
+    app.add_handler(CommandHandler("enroll", enroll_command))
+
 
     print("Bot is running...")
     app.run_polling()
