@@ -12,7 +12,11 @@ from database import (
     delete_student,
     add_class,
     get_classes,
-    enroll_student
+    enroll_student,
+    get_student_classes,
+    get_class_students,
+    add_class_schedule,
+    get_class_schedules
 )
 
 load_dotenv()
@@ -363,6 +367,200 @@ async def enroll_command(
             "⚠️ دانش‌آموز یا کلاس با این شناسه وجود ندارد."
         )
 
+async def student_classes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.message.reply_text("شما مجوز دسترسی به این بخش را ندارید.")
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "فرمت دستور نادرست است.\n"
+            "روش استفاده:\n"
+            "/student_classes شناسه_دانش‌آموز"
+        )
+        return
+
+    student_id = int(context.args[0])
+
+    if student_id <= 0:
+        await update.message.reply_text("شناسه دانش‌آموز نامعتبر است.")
+        return
+
+    classes = get_student_classes(student_id)
+
+    if not classes:
+        await update.message.reply_text(
+            "این دانش‌آموز در هیچ کلاسی ثبت‌نام نشده است."
+        )
+        return
+
+    message = f"کلاس‌های دانش‌آموز با شناسه {student_id}:\n"
+
+    for class_id, class_name in classes:
+        message += f"\nشناسه کلاس: {class_id} | نام کلاس: {class_name}"
+
+    await update.message.reply_text(message)
+
+async def class_students_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.effective_message.reply_text(
+            "شما مجوز دسترسی به این بخش را ندارید."
+        )
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.effective_message.reply_text(
+            "فرمت دستور نادرست است.\n"
+            "روش استفاده:\n"
+            "/class_students شناسه_کلاس"
+        )
+        return
+
+    class_id = int(context.args[0])
+
+    if class_id <= 0:
+        await update.effective_message.reply_text("شناسه کلاس نامعتبر است.")
+        return
+
+    students = get_class_students(class_id)
+
+    if not students:
+        await update.effective_message.reply_text(
+            "هیچ دانش‌آموزی در این کلاس ثبت‌نام نکرده است."
+        )
+        return
+
+    message = f"دانش‌آموزان کلاس با شناسه {class_id}:\n"
+
+    for student_id, full_name, phone in students:
+        message += (
+            f"\nشناسه: {student_id}"
+            f"\nنام: {full_name}"
+            f"\nشماره تماس: {phone}\n"
+        )
+
+    await update.effective_message.reply_text(message)
+
+async def add_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.effective_message.reply_text(
+            "شما مجوز دسترسی به این بخش را ندارید."
+        )
+        return
+
+    if len(context.args) != 4:
+        await update.effective_message.reply_text(
+            "فرمت دستور نادرست است.\n"
+            "روش استفاده:\n"
+            "/add_schedule شناسه_کلاس شماره_روز ساعت_شروع ساعت_پایان\n\n"
+            "شماره روزها:\n"
+            "۰: شنبه\n۱: یکشنبه\n۲: دوشنبه\n۳: سه‌شنبه\n"
+            "۴: چهارشنبه\n۵: پنجشنبه\n۶: جمعه\n\n"
+            "مثال:\n"
+            "/add_schedule 1 0 10:00 12:00"
+        )
+        return
+
+    class_id, day, start_time, end_time = context.args
+
+    if not class_id.isdigit() or not day.isdigit():
+        await update.effective_message.reply_text(
+            "شناسه کلاس و شماره روز باید عدد باشند."
+        )
+        return
+
+    class_id = int(class_id)
+    day = int(day)
+
+    if class_id <= 0 or day not in range(7):
+        await update.effective_message.reply_text(
+            "شناسه کلاس یا شماره روز نامعتبر است."
+        )
+        return
+
+    try:
+        schedule_id = add_class_schedule(
+            class_id, day, start_time, end_time
+        )
+
+        days = [
+            "شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه",
+            "چهارشنبه", "پنجشنبه", "جمعه"
+        ]
+
+        await update.effective_message.reply_text(
+            f"برنامه کلاس با موفقیت ثبت شد. ✅\n\n"
+            f"شناسه برنامه: {schedule_id}\n"
+            f"روز: {days[day]}\n"
+            f"ساعت: {start_time} تا {end_time}"
+        )
+
+    except ValueError as error:
+        await update.effective_message.reply_text(
+            f"خطا در ثبت برنامه: {error}"
+        )
+
+    except sqlite3.IntegrityError:
+        await update.effective_message.reply_text(
+            "این کلاس وجود ندارد یا اطلاعات ثبت برنامه معتبر نیست."
+        )
+
+async def class_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await update.effective_message.reply_text(
+            "شما مجوز دسترسی به این بخش را ندارید."
+        )
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await update.effective_message.reply_text(
+            "فرمت دستور نادرست است.\n"
+            "روش استفاده:\n"
+            "/class_schedule شناسه_کلاس"
+        )
+        return
+
+    class_id = int(context.args[0])
+
+    if class_id <= 0:
+        await update.effective_message.reply_text(
+            "شناسه کلاس نامعتبر است."
+        )
+        return
+
+    schedules = get_class_schedules(class_id)
+
+    if not schedules:
+        await update.effective_message.reply_text(
+            "برای این کلاس هنوز برنامه‌ای ثبت نشده است."
+        )
+        return
+
+    days = [
+        "شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه",
+        "چهارشنبه", "پنجشنبه", "جمعه"
+    ]
+
+    message = f"برنامه هفتگی کلاس با شناسه {class_id}:\n"
+
+    for schedule_id, day, start_time, end_time in schedules:
+        message += (
+            f"\n{days[day]}: {start_time} تا {end_time}"
+        )
+
+    await update.effective_message.reply_text(message)
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -377,7 +575,10 @@ def main():
     app.add_handler(CommandHandler("add_class", add_class_command))
     app.add_handler(CommandHandler("classes", classes_command))
     app.add_handler(CommandHandler("enroll", enroll_command))
-
+    app.add_handler(CommandHandler("student_classes", student_classes_command))
+    app.add_handler(CommandHandler("class_students", class_students_command))
+    app.add_handler(CommandHandler("add_schedule", add_schedule_command))
+    app.add_handler(CommandHandler("class_schedule", class_schedule_command))
 
     print("Bot is running...")
     app.run_polling()
