@@ -16,7 +16,9 @@ from database import (
     get_student_classes,
     get_class_students,
     add_class_schedule,
-    get_class_schedules
+    get_class_schedules,
+    generate_student_link_code,
+    link_student_telegram
 )
 
 load_dotenv()
@@ -37,14 +39,37 @@ def is_owner(user_id: int) -> bool:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    message = update.effective_message
+
+    if context.args:
+        code = context.args[0]
+
+        try:
+            student_id, full_name = link_student_telegram(
+                code=code,
+                telegram_id=user.id
+            )
+
+            await message.reply_text(
+                f"سلام {full_name} عزیز! 🌷\n"
+                "حساب تلگرام شما با موفقیت به پرونده هنرجویی‌تان متصل شد."
+            )
+
+        except ValueError as error:
+            await message.reply_text(
+                f"اتصال انجام نشد: {error}"
+            )
+
+        return
 
     if is_owner(user.id):
         print("Owner logged in")
     else:
         print("Regular user logged in")
 
-    await update.message.reply_text(
-        "سلام! 👋\nبه ربات یادآوری کلاس‌ها خوش اومدی."
+    await message.reply_text(
+        "سلام! 👋\n"
+        "به ربات یادآوری کلاس‌ها خوش اومدی."
     )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -562,6 +587,43 @@ async def class_schedule_command(update: Update, context: ContextTypes.DEFAULT_T
 
     await update.effective_message.reply_text(message)
 
+async def generate_link_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    message = update.effective_message
+
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await message.reply_text("شما اجازه انجام این کار رو ندارید.")
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await message.reply_text(
+            "فرمت دستور:\n/generate_link STUDENT_ID"
+        )
+        return
+
+    student_id = int(context.args[0])
+
+    if student_id <= 0:
+        await message.reply_text("شناسه هنرجو معتبر نیست.")
+        return
+
+    try:
+        code = generate_student_link_code(student_id)
+
+        await message.reply_text(
+            f"کد اتصال هنرجو:\n{code}\n\n"
+            "این کد را به‌صورت خصوصی برای هنرجو بفرستید.\n"
+            "اعتبار کد ۲۴ ساعت است."
+        )
+
+    except ValueError as error:
+        await message.reply_text(str(error))
+
 def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -579,6 +641,7 @@ def main():
     app.add_handler(CommandHandler("class_students", class_students_command))
     app.add_handler(CommandHandler("add_schedule", add_schedule_command))
     app.add_handler(CommandHandler("class_schedule", class_schedule_command))
+    app.add_handler(CommandHandler("generate_link", generate_link_command))
 
     print("Bot is running...")
     app.run_polling()

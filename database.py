@@ -1,7 +1,9 @@
 import sqlite3
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta,timezone
+import secrets
+import hashlib
 
 DB_NAME = "class_reminder.db"
 
@@ -82,6 +84,35 @@ def create_students_table():
         )
     """)
 
+    connection.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS
+        idx_students_telegram_id_unique
+        ON students(telegram_id)
+        WHERE telegram_id IS NOT NULL
+    """)
+
+    connection.commit()
+    connection.close()
+
+def add_student_link_columns():
+    connection = create_connection()
+
+    cursor = connection.execute(
+        "PRAGMA table_info(students)"
+    )
+
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "link_code" not in columns:
+        connection.execute(
+            "ALTER TABLE students ADD COLUMN link_code TEXT"
+        )
+
+    if "link_code_expires_at" not in columns:
+        connection.execute(
+            "ALTER TABLE students ADD COLUMN link_code_expires_at TEXT"
+        )
+
     connection.commit()
     connection.close()
 
@@ -128,6 +159,111 @@ def delete_student(student_id: int) -> bool:
     connection.close()
     
     return removed
+
+def generate_student_link_code(student_id: int):
+    code = secrets.token_urlsafe(16)
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+    connection = create_connection()
+
+    cursor = connection.execute(
+        """
+        SELECT telegram_id
+        FROM students
+        WHERE student_id = ?
+        """,
+        (student_id,)
+    )
+    student = cursor.fetchone()
+
+    if student is None:
+        connection.close()
+        raise ValueError("Student not found.")
+
+    if student[0] is not None:
+        connection.close()
+        raise ValueError("Student is already linked.")
+
+    connection.execute(
+        """
+        UPDATE students
+        SET link_code = ?, link_code_expires_at = ?
+        WHERE student_id = ?
+        """,
+        (code_hash, expires_at.isoformat(), student_id)
+    )
+
+    connection.commit()
+    connection.close()
+
+    return code
+
+def link_student_telegram(code: str, telegram_id: int):
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+
+    connection = create_connection()
+
+    cursor = connection.execute(
+        """
+        SELECT student_id, full_name, link_code_expires_at
+        FROM students
+        WHERE link_code = ?
+        """,
+        (code_hash,)
+    )
+    student = cursor.fetchone()
+
+    if student is None:
+        connection.close()
+        raise ValueError("Invalid link code.")
+
+    student_id, full_name, expires_at = student
+
+    expiry_time = datetime.fromisoformat(expires_at)
+
+    if datetime.now(timezone.utc) >= expiry_time:
+        connection.execute(
+            """
+            UPDATE students
+            SET link_code = NULL, link_code_expires_at = NULL
+            WHERE student_id = ?
+            """,
+            (student_id,)
+        )
+        connection.commit()
+        connection.close()
+        raise ValueError("Link code has expired.")
+
+    cursor = connection.execute(
+        """
+        SELECT student_id
+        FROM students
+        WHERE telegram_id = ?
+        """,
+        (telegram_id,)
+    )
+
+    if cursor.fetchone() is not None:
+        connection.close()
+        raise ValueError("This Telegram account is already linked.")
+
+    connection.execute(
+        """
+        UPDATE students
+        SET telegram_id = ?,
+            link_code = NULL,
+            link_code_expires_at = NULL
+        WHERE student_id = ?
+        """,
+        (telegram_id, student_id)
+    )
+
+    connection.commit()
+    connection.close()
+
+    return student_id, full_name
 
 def create_classes_table():
     connection = create_connection()
@@ -367,3 +503,16 @@ if __name__ == "__main__":
     result = connection.execute(
         "PRAGMA foreign_keys"
     ).fetchone()
+
+    add_student_link_columns()
+
+    connection = create_connection()
+    cursor = connection.execute("PRAGMA table_info(students)")
+    print([row[1] for row in cursor.fetchall()])
+    connection.close()
+
+    try: 
+        code = generate_student_link_code(1)
+        print("link code :" , code)
+    except ValueError as error:
+        print(error)
