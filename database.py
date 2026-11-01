@@ -139,7 +139,15 @@ def add_student(full_name: str, phone: str | None = None, telegram_id: int | Non
 def get_students():
     connection = create_connection()
 
-    cursor = connection.execute("SELECT * FROM students")
+    cursor = connection.execute("""
+        SELECT
+            student_id,
+            full_name,
+            phone,
+            telegram_id,
+            created_at
+        FROM students
+    """)
     students = cursor.fetchall()
 
     connection.close()
@@ -264,6 +272,29 @@ def link_student_telegram(code: str, telegram_id: int):
     connection.close()
 
     return student_id, full_name
+
+def unlink_student_telegram(student_id):
+    connection = create_connection()
+
+    try:
+        cursor = connection.execute(
+            """
+            UPDATE students
+            SET telegram_id = NULL,
+                link_code = NULL,
+                link_code_expires_at = NULL
+            WHERE student_id = ?
+            AND telegram_id IS NOT NULL
+            """,
+            (student_id,)
+        )
+
+        connection.commit()
+
+        return cursor.rowcount > 0
+
+    finally:
+        connection.close()
 
 def create_classes_table():
     connection = create_connection()
@@ -462,7 +493,8 @@ def get_class_students(class_id: int):
         SELECT
             students.student_id,
             students.full_name,
-            students.phone
+            students.phone,
+            students.telegram_id
         FROM student_classes
         JOIN students
             ON student_classes.student_id = students.student_id
@@ -491,28 +523,7 @@ if __name__ == "__main__":
     add_admin(owner_id, "owner")
 
     create_students_table()
-
-    create_classes_table()
-
-    create_class_schedules_table()
-
-    create_student_classes_table()
-
-    connection = create_connection()
-
-    result = connection.execute(
-        "PRAGMA foreign_keys"
-    ).fetchone()
-
     add_student_link_columns()
-
-    connection = create_connection()
-    cursor = connection.execute("PRAGMA table_info(students)")
-    print([row[1] for row in cursor.fetchall()])
-    connection.close()
-
-    try: 
-        code = generate_student_link_code(1)
-        print("link code :" , code)
-    except ValueError as error:
-        print(error)
+    create_classes_table()
+    create_class_schedules_table()
+    create_student_classes_table()

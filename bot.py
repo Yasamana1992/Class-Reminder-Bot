@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import sqlite3
+import asyncio
 from database import (
     get_admin_role,
     add_admin,
@@ -18,8 +19,10 @@ from database import (
     add_class_schedule,
     get_class_schedules,
     generate_student_link_code,
-    link_student_telegram
+    link_student_telegram,
+    unlink_student_telegram
 )
+from telegram.error import Forbidden, BadRequest,RetryAfter, NetworkError
 
 load_dotenv()
 
@@ -379,7 +382,7 @@ async def enroll_command(
         enrolled = enroll_student(student_id, class_id)
 
         if enrolled:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "✅ دانش‌آموز با موفقیت در کلاس ثبت‌نام شد."
             )
         else:
@@ -463,11 +466,13 @@ async def class_students_command(update: Update, context: ContextTypes.DEFAULT_T
 
     message = f"دانش‌آموزان کلاس با شناسه {class_id}:\n"
 
-    for student_id, full_name, phone in students:
+    for student_id, full_name, phone, telegram_id in students:
         message += (
             f"\nشناسه: {student_id}"
             f"\nنام: {full_name}"
-            f"\nشماره تماس: {phone}\n"
+            f"\nشماره تماس: {phone}"
+            f"\nوضعیت اتصال تلگرام: "
+            f"{'متصل' if telegram_id else 'متصل نشده'}\n"
         )
 
     await update.effective_message.reply_text(message)
@@ -624,6 +629,126 @@ async def generate_link_command(
     except ValueError as error:
         await message.reply_text(str(error))
 
+async def announce_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    message = update.effective_message
+
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await message.reply_text("شما مجوز ارسال اطلاعیه ندارید.")
+        return
+
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        await message.reply_text(
+            "روش استفاده:\n"
+            "/announce CLASS_ID متن پیام"
+        )
+        return
+
+    class_id = int(context.args[0])
+    announcement = " ".join(context.args[1:]).strip()
+
+    if class_id <= 0 or not announcement:
+        await message.reply_text("شناسه کلاس یا متن پیام معتبر نیست.")
+        return
+
+    students = get_class_students(class_id)
+
+    if not students:
+        await message.reply_text(
+            "هنرجویی در این کلاس ثبت‌نام نکرده است."
+        )
+        return
+
+    sent = 0
+    not_linked = 0
+    failed = 0
+    uncertain = 0
+
+    for student_id, full_name, phone, telegram_id in students:
+
+        if telegram_id is None:
+            not_linked += 1
+            continue
+
+        try:
+            await context.bot.send_message(
+                chat_id=telegram_id,
+                text=announcement
+            )
+            sent += 1
+
+        except (Forbidden, BadRequest):
+            failed += 1
+
+        except RetryAfter as error:
+            await asyncio.sleep(error.retry_after + 1)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=telegram_id,
+                    text=announcement
+                )
+                sent += 1
+            except (Forbidden, BadRequest):
+                failed += 1
+            except NetworkError:
+                        uncertain += 1
+
+        except NetworkError:
+            uncertain += 1
+
+    await message.reply_text(
+        "گزارش ارسال اطلاعیه:\n"
+        f"ارسال موفق: {sent}\n"
+        f"حساب متصل‌نشده: {not_linked}\n"
+        f"ارسال ناموفق: {failed}\n"
+        f"نتیجه نامشخص: {uncertain}"
+    )
+
+async def unlink_student_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    user = update.effective_user
+    message = update.effective_message
+
+    role = get_admin_role(user.id)
+
+    if role not in ("owner", "admin"):
+        await message.reply_text(
+            "شما مجوز قطع اتصال هنرجو را ندارید."
+        )
+        return
+
+    if len(context.args) != 1 or not context.args[0].isdigit():
+        await message.reply_text(
+            "روش استفاده:\n"
+            "/unlink_student STUDENT_ID"
+        )
+        return
+
+    student_id = int(context.args[0])
+
+    if student_id <= 0:
+        await message.reply_text("شناسه هنرجو معتبر نیست.")
+        return
+
+    result = unlink_student_telegram(student_id)
+
+    if result:
+        await message.reply_text(
+            f"اتصال تلگرام هنرجوی شماره {student_id} قطع شد."
+        )
+    else:
+        await message.reply_text(
+            "هنرجو وجود ندارد یا حساب تلگرام او متصل نیست."
+        )
+
 def main():
     app = Application.builder().token(TOKEN).build()
 
@@ -642,7 +767,8 @@ def main():
     app.add_handler(CommandHandler("add_schedule", add_schedule_command))
     app.add_handler(CommandHandler("class_schedule", class_schedule_command))
     app.add_handler(CommandHandler("generate_link", generate_link_command))
-
+    app.add_handler(CommandHandler("announce", announce_command))
+    app.add_handler(CommandHandler("unlink_student", unlink_student_command))
     print("Bot is running...")
     app.run_polling()
 
