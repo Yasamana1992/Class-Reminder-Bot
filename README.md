@@ -162,6 +162,23 @@ Foreign key constraints are enabled to maintain relationships between database r
 - More flexible schedule management
 - Automated tests
 
+## screenshots 
+
+### Bot Welcome & Admin Panel
+![Bot Welcome & Admin Panel](screenshots/start&admin_panel.jpg)
+
+### Adding Students
+![Adding Students](screenshots/add_students.jpg)
+
+### Students List
+![Student List](screenshots/students_list.jpg)
+
+### Student Enrollment
+![Student Enrollment](screenshots/enrollments.jpg)
+
+### Class Schdule
+![Class Schedule](screenshots/class_schedule.jpg)
+
 ## Author
 
 Yasaman Abbasi
